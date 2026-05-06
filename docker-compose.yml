@@ -24,7 +24,7 @@ services:
     depends_on:
       - llama-server
     environment:
-      - LLAMA_BASE_URL=http://llama-server:8080
+      - LLAMA_BASE_URL=http://host.docker.internal:8080
       - LLAMA_MODEL=hy-mt1.5-1.8b-q4_k_m.gguf
     ports:
       - "8000:8000"
