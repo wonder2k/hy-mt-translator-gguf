@@ -26,6 +26,8 @@ hy-mt-translator/
   │       ├─ main.py
   │       ├─ models.py
   │       └─ translator_client.py
+  ├─ scripts/
+  │   └─ test-translate-batch.ps1
   └─ models/
       └─ HY-MT1.5-1.8B-Q4_K_M.gguf
 ```
@@ -55,7 +57,63 @@ hy-mt-translator/models/HY-MT1.5-1.8B-Q4_K_M.gguf
 
 ---
 
-## 4. 启动方式
+## 4. docker-compose.yml 推荐配置
+
+```yaml
+version: "3.9"
+
+services:
+  llama-server:
+    build:
+      context: ./llama-server
+    container_name: hy-mt-llama-server
+    command:
+      - /opt/llama.cpp/build/bin/llama-server
+      - --model
+      - /models/HY-MT1.5-1.8B-Q4_K_M.gguf
+      - -c
+      - "1024"
+      - -t
+      - "8"
+      - -np
+      - "4"
+      - --cont-batching
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    environment:
+      - LD_LIBRARY_PATH=/opt/llama.cpp/build/bin:/opt/llama.cpp/build/src:/opt/llama.cpp/build/ggml/src
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  translator-api:
+    build:
+      context: ./translator-api
+    container_name: hy-mt-translator-api
+    depends_on:
+      - llama-server
+    environment:
+      - LLAMA_BASE_URL=http://host.docker.internal:8080
+      - LLAMA_MODEL=HY-MT1.5-1.8B-Q4_K_M.gguf
+      - MAX_INPUT_CHARS=160
+      - MAX_OUTPUT_TOKENS=48
+      - REQUEST_TIMEOUT_SECONDS=60
+      - MAX_RETRIES=3
+      - RETRY_BASE_DELAY_SECONDS=0.8
+      - MAX_BATCH_ITEMS=50
+      - CONCURRENCY_LIMIT=3
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+```
+
+---
+
+## 5. 启动方式
 
 在项目根目录执行：
 
@@ -67,7 +125,9 @@ docker-compose up -d
 
 ---
 
-## 5. 查看 llama-server 状态
+## 6. 查看服务日志
+
+### 6.1 llama-server
 
 ```powershell
 docker logs hy-mt-llama-server --tail 200
@@ -80,11 +140,19 @@ docker logs hy-mt-llama-server --tail 200
 - `main: model loaded`
 - `main: server is listening on http://0.0.0.0:8080`
 
+### 6.2 translator-api
+
+```powershell
+docker logs hy-mt-translator-api --tail 200
+```
+
+如果这里出现 `SyntaxError`、`Traceback` 等错误，请先修复 Python 代码再继续测试。
+
 ---
 
-## 6. 先测试底层 llama-server
+## 7. 先测试底层 llama-server
 
-### 6.1 测试首页
+### 7.1 测试首页
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8080/" -Method GET
@@ -92,7 +160,7 @@ Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8080/" -Method GET
 
 如果返回 200，说明服务已启动。
 
-### 6.2 测试 chat/completions
+### 7.2 测试 chat/completions
 
 ```powershell
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -124,11 +192,419 @@ $result | ConvertTo-Json -Depth 6
 
 ---
 
-## 7. 测试业务接口 `/translate-batch`
+## 8. 测试业务接口
 
-### 7.1 PowerShell 推荐测试命令（UTF-8）
-
-请优先使用下面这组命令，避免 Windows PowerShell 乱码问题：
+### 8.1 测试 `/health`
 
 ```powershell
-[Console]::OutputEncoding 
+Invoke-RestMethod http://localhost:8000/health
+```
+
+正常应返回：
+
+```json
+{
+  "status": "ok"
+}
+```
+
+### 8.2 测试 `/translate-batch`
+
+推荐在 PowerShell 里使用 `Invoke-RestMethod` 进行测试：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+$body = @{
+  source_lang = "en"
+  target_lang = "ja"
+  items = @(
+    @{
+      text = "2-8-1 Nishishinjuku, Shinjuku-ku, Tokyo 163-8001"
+      field_type = "address"
+    },
+    @{
+      text = "Apple iPhone 15 Pro Max 256GB Black Titanium"
+      field_type = "item_name"
+    },
+    @{
+      text = "John Smith"
+      field_type = "person"
+    }
+  )
+} | ConvertTo-Json -Depth 3
+
+$result = Invoke-RestMethod `
+  -Uri "http://localhost:8000/translate-batch" `
+  -Method POST `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
+  -ContentType "application/json; charset=utf-8"
+
+$result | ConvertTo-Json -Depth 5
+```
+
+正常返回应类似：
+
+```json
+{
+  "translations": [
+    "東京都新宿区西新宿2-8-1 163-8001",
+    "Apple iPhone 15 Pro Max 256GB ブラックチタニウム",
+    "ジョン・スミス"
+  ]
+}
+```
+
+---
+
+## 9. 接口说明
+
+### `GET /health`
+
+返回：
+
+```json
+{
+  "status": "ok"
+}
+```
+
+### `POST /translate-batch`
+
+请求体：
+
+```json
+{
+  "source_lang": "en",
+  "target_lang": "ja",
+  "items": [
+    {
+      "text": "2-8-1 Nishishinjuku, Shinjuku-ku, Tokyo 163-8001",
+      "field_type": "address"
+    },
+    {
+      "text": "Apple iPhone 15 Pro Max 256GB Black Titanium",
+      "field_type": "item_name"
+    },
+    {
+      "text": "John Smith",
+      "field_type": "person"
+    }
+  ]
+}
+```
+
+响应体：
+
+```json
+{
+  "translations": [
+    "東京都新宿区西新宿2-8-1 163-8001",
+    "Apple iPhone 15 Pro Max 256GB ブラックチタニウム",
+    "ジョン・スミス"
+  ]
+}
+```
+
+---
+
+## 10. field_type 说明
+
+支持以下取值：
+
+- `address`
+- `item_name`
+- `person`
+- `generic`
+
+当前策略：
+
+### `address`
+用于地址翻译，尽量保留：
+- 数字
+- 楼栋号
+- 房号
+- 邮编
+- 关键地址结构
+
+### `item_name`
+用于物流品名、清关品名，尽量保留：
+- 品牌
+- 型号
+- 容量
+- 尺寸
+- 颜色
+
+### `person`
+用于人名，尽量输出简洁稳定的名字，不追加 `様` 等敬语。
+
+### `generic`
+通用短文本翻译。
+
+---
+
+## 11. 当前 prompt 设计原则
+
+当前版本**不使用长规则 prompt**。  
+原因是：在当前 GGUF + llama.cpp 组合下，模型可能会把说明文字本身一起翻译出来。
+
+所以当前策略是：
+
+- 使用**短 prompt**
+- 使用后处理清理杂质
+- 通过字段类型控制 prompt 风格
+- 控制 `max_tokens` 避免模型输出冗长解释
+
+例如：
+
+- address:
+  - `Translate the following address into Japanese, without additional explanation.`
+- item_name:
+  - `Translate the following product name into Japanese, without additional explanation.`
+- person:
+  - `Translate the following name into Japanese, without additional explanation.`
+
+---
+
+## 12. 当前性能策略
+
+当前版本属于：
+
+- **业务层批量**
+- **Python 受控并行**
+- **底层 llama-server 多请求处理**
+
+这意味着：
+
+- API 支持一次传入多个 item
+- Python 使用 `asyncio.gather + Semaphore` 做受控并行
+- llama-server 使用 `-np 4 + --cont-batching`
+- 当前方式更稳定，也更容易调试
+
+建议起始参数：
+
+- `CONCURRENCY_LIMIT=3`
+- `MAX_BATCH_ITEMS=50`
+- `MAX_OUTPUT_TOKENS=48`
+
+---
+
+## 13. 批量压测脚本
+
+为了方便测试 `/translate-batch` 在不同批量下的性能，提供一份 PowerShell 压测脚本。
+
+### 13.1 创建脚本文件
+
+创建：
+
+```text
+hy-mt-translator/scripts/test-translate-batch.ps1
+```
+
+内容如下：
+
+```powershell
+# 强制使用 UTF-8 编码，避免中文乱码
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
+# 1. 先检查 /health 接口是否正常
+Write-Host "1. Testing /health..." -ForegroundColor Green
+try {
+    $health = Invoke-RestMethod -Uri "http://localhost:8000/health"
+    Write-Host "  - /health OK: $($health.status)" -ForegroundColor Green
+} catch {
+    Write-Host "  - /health FAIL: $($_.ErrorDetails.Message)" -ForegroundColor Red
+    exit 1
+}
+
+# 2. 定义基础测试数据
+$BaseText = "Apple iPhone 15 Pro Max 256GB Black Titanium"
+$BaseField = "item_name"
+
+function BuildBatchBody {
+    param(
+        [int]$ItemCount
+    )
+
+    $Items = @()
+    for ($i = 0; $i -lt $ItemCount; $i++) {
+        $Items += @{
+            text = "$BaseText #$($i + 1)"
+            field_type = $BaseField
+        }
+    }
+
+    @{
+        source_lang = "en"
+        target_lang = "ja"
+        items = $Items
+    }
+}
+
+# 3. 逐次测试 1条、10条、20条、50条
+$TestCases = @(1, 10, 20, 50)
+
+foreach ($ItemCount in $TestCases) {
+    Write-Host "2. Testing $ItemCount-item batch..." -ForegroundColor Yellow
+
+    $BodyObj = BuildBatchBody -ItemCount $ItemCount
+    $BodyJson = $BodyObj | ConvertTo-Json -Depth 3
+    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($BodyJson)
+
+    $StopWatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $Result = Invoke-RestMethod `
+            -Uri "http://localhost:8000/translate-batch" `
+            -Method POST `
+            -Body $Bytes `
+            -ContentType "application/json; charset=utf-8"
+
+        $StopWatch.Stop()
+
+        if ($Result.translations.Count -eq $ItemCount) {
+            Write-Host "  - Success: $ItemCount items, time: $($StopWatch.ElapsedMilliseconds) ms" -ForegroundColor Green
+        } else {
+            Write-Host "  - ERROR: expected $ItemCount items, got $($Result.translations.Count)" -ForegroundColor Red
+        }
+    } catch {
+        $StopWatch.Stop()
+        Write-Host "  - ERROR: $($StopWatch.ElapsedMilliseconds) ms, error: $($_.ErrorDetails.Message)" -ForegroundColor Red
+    }
+}
+
+Write-Host "All tests done." -ForegroundColor Cyan
+```
+
+### 13.2 运行脚本
+
+如果系统默认不允许直接运行 `.ps1`，推荐使用下面这个一次性命令：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File ".\scripts\test-translate-batch.ps1"
+```
+
+如果你已经允许当前用户执行本地脚本，也可以直接运行：
+
+```powershell
+.\scripts\test-translate-batch.ps1
+```
+
+### 13.3 示例压测结果
+
+示例输出：
+
+```text
+1. Testing /health...
+  - /health OK: ok
+2. Testing 1-item batch...
+  - Success: 1 items, time: 1102 ms
+2. Testing 10-item batch...
+  - Success: 10 items, time: 5824 ms
+2. Testing 20-item batch...
+  - Success: 20 items, time: 17755 ms
+2. Testing 50-item batch...
+  - Success: 50 items, time: 40351 ms
+All tests done.
+```
+
+### 13.4 压测结果解读
+
+从上述样例可以看出：
+
+- 1 条请求约 1.1 秒
+- 10 条请求总耗时约 5.8 秒，平均每条约 0.58 秒
+- 20 条请求总耗时约 17.8 秒，平均每条约 0.89 秒
+- 50 条请求总耗时约 40.4 秒，平均每条约 0.81 秒
+
+说明：
+
+- 小批量（例如 5 到 10 条）通常性价比最好
+- 批量越大，吞吐不一定线性提升
+- 在本地 CPU 场景下，不建议默认单次 batch 做得过大
+
+当前建议：
+
+- 默认业务分块大小：8 到 12 条
+- `CONCURRENCY_LIMIT=3` 先保持不变
+- 后续优先引入缓存，再继续压榨吞吐
+
+---
+
+## 14. Windows PowerShell 执行策略说明
+
+如果运行脚本时报错：
+
+```text
+cannot be loaded because running scripts is disabled on this system
+```
+
+说明 PowerShell 执行策略阻止了 `.ps1` 文件直接运行。
+
+推荐做法是一次性绕过，不修改系统全局策略：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File ".\scripts\test-translate-batch.ps1"
+```
+
+如果你希望当前用户以后都能方便运行本地脚本，可以以管理员身份运行 PowerShell，然后执行：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+之后按 `Y` 确认。
+
+---
+
+## 15. 常见问题
+
+### 15.1 PowerShell 显示乱码
+
+如果返回日文时出现乱码，通常不是服务错误，而是控制台编码问题。  
+请确保使用：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+并使用：
+
+```powershell
+-Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+-ContentType "application/json; charset=utf-8"
+```
+
+### 15.2 模型把提示词规则也翻译出来
+
+说明 prompt 太长、太像说明书。  
+请改用当前 README 中的**短 prompt 版本**，不要恢复旧版长规则模板。
+
+### 15.3 translator-api 改了但没生效
+
+修改 Python 代码后要重新 build：
+
+```powershell
+docker-compose build translator-api
+docker-compose up -d translator-api
+```
+
+### 15.4 批量太大导致响应明显变慢
+
+这是本地 CPU 推理的正常现象。  
+建议优先做业务分块和缓存，而不是继续无限增大单次 batch。
+
+---
+
+## 16. 后续优化路线
+
+建议按这个顺序做：
+
+1. 当前稳定版跑通
+2. Python 侧受控并行
+3. llama-server 并发参数微调
+4. Express 端批量分块
+5. Redis / PostgreSQL 
