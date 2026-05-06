@@ -13,6 +13,9 @@ services:
       - "1024"
       - -t
       - "8"
+      - -np
+      - "4"
+      - --cont-batching
       - --host
       - 0.0.0.0
       - --port
@@ -34,6 +37,13 @@ services:
     environment:
       - LLAMA_BASE_URL=http://host.docker.internal:8080
       - LLAMA_MODEL=HY-MT1.5-1.8B-Q4_K_M.gguf
+      - MAX_INPUT_CHARS=160
+      - MAX_OUTPUT_TOKENS=48
+      - REQUEST_TIMEOUT_SECONDS=60
+      - MAX_RETRIES=3
+      - RETRY_BASE_DELAY_SECONDS=0.8
+      - MAX_BATCH_ITEMS=50
+      - CONCURRENCY_LIMIT=3
     ports:
       - "8000:8000"
     restart: unless-stopped
