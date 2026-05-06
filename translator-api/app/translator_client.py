@@ -101,4 +101,107 @@ def _postprocess_translation(field_type: str, text: str) -> str:
     elif field_type == "item_name":
         text = text.rstrip("。.;；")
 
-    elif field_type == 
+    elif field_type == "person":
+        text = text.replace("様", "").replace("さん", "").strip()
+
+    return text
+
+
+async def _post_with_retry(client: httpx.AsyncClient, payload: dict) -> dict:
+    last_error = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = await client.post(
+                f"{LLAMA_BASE_URL}/v1/chat/completions",
+                json=payload,
+            )
+
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                raise httpx.HTTPStatusError(
+                    f"Retryable upstream status: {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+
+            response.raise_for_status()
+            return response.json()
+
+        except (
+            httpx.TimeoutException,
+            httpx.ConnectError,
+            httpx.ReadError,
+            httpx.RemoteProtocolError,
+            httpx.HTTPStatusError,
+        ) as exc:
+            last_error = exc
+            if attempt == MAX_RETRIES:
+                break
+            await asyncio.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+
+    raise RuntimeError(
+        f"llama-server request failed after {MAX_RETRIES} attempts: {last_error}"
+    )
+
+
+async def _translate_one(
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+    source_lang: str,
+    target_lang: str,
+    text: str,
+    field_type: str,
+) -> str:
+    async with semaphore:
+        clean_text = _truncate_text(text)
+        prompt = _build_prompt(field_type, source_lang, target_lang, clean_text)
+
+        payload = {
+            "model": LLAMA_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "temperature": 0.2,
+            "top_p": 0.9,
+        }
+
+        data = await _post_with_retry(client, payload)
+        content = _extract_content(data)
+        return _postprocess_translation(field_type, content)
+
+
+async def translate_batch_via_llama(
+    source_lang: str,
+    target_lang: str,
+    texts: List[str],
+    field_types: List[str],
+) -> List[str]:
+    if len(texts) != len(field_types):
+        raise ValueError("texts and field_types must have the same length")
+
+    if len(texts) > MAX_BATCH_ITEMS:
+        raise ValueError(f"batch size exceeds limit: {MAX_BATCH_ITEMS}")
+
+    timeout = httpx.Timeout(REQUEST_TIMEOUT_SECONDS)
+    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        tasks = [
+            _translate_one(
+                client=client,
+                semaphore=semaphore,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                text=text,
+                field_type=field_type,
+            )
+            for text, field_type in zip(texts, field_types)
+        ]
+
+        translations = await asyncio.gather(*tasks)
+
+    return list(translations)
