@@ -1,0 +1,24 @@
+$body = @{
+  shipments = @(
+    @{
+      shipmentNo = "SHP001"
+      receiverAddressEn = "2-8-1 Nishishinjuku, Shinjuku-ku, Tokyo 163-8001"
+      itemNameEn = "Apple iPhone 15 Pro Max 256GB Black Titanium"
+      receiverNameEn = "John Smith"
+      memoEn = "Handle with care"
+    },
+    @{
+      shipmentNo = "SHP002"
+      receiverAddressEn = "1-1 Chiyoda, Chiyoda-ku, Tokyo 100-8111"
+      itemNameEn = "Samsung Galaxy S24 Ultra 512GB"
+      receiverNameEn = "Emily Johnson"
+      memoEn = "Do not stack"
+    }
+  )
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri "http://localhost:3000/api/shipments/batch-translate" `
+  -Method POST `
+  -Body $body `
+  -ContentType "application/json"
