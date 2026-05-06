@@ -1,0 +1,12 @@
+$body = @{
+  receiverAddressEn = "2-8-1 Nishishinjuku, Shinjuku-ku, Tokyo 163-8001"
+  itemNameEn = "Apple iPhone 15 Pro Max 256GB Black Titanium"
+  receiverNameEn = "John Smith"
+  memoEn = "Handle with care"
+} | ConvertTo-Json -Depth 3
+
+Invoke-RestMethod `
+  -Uri "http://localhost:3000/api/shipments/translate-demo" `
+  -Method POST `
+  -Body $body `
+  -ContentType "application/json"
