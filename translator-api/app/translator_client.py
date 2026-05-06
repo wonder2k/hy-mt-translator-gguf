@@ -8,7 +8,7 @@ LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "http://host.docker.internal:8080")
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "HY-MT1.5-1.8B-Q4_K_M.gguf")
 
 MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "160"))
-MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "80"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "48"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_BASE_DELAY_SECONDS = float(os.getenv("RETRY_BASE_DELAY_SECONDS", "0.8"))
@@ -30,66 +30,24 @@ def _normalize_whitespace(text: str) -> str:
     return text.strip()
 
 
-def _postprocess_translation(field_type: str, text: str) -> str:
-    text = _normalize_whitespace(text)
-    text = text.strip(' "\'')
-
-    prefixes = [
-        "翻译：",
-        "译文：",
-        "Translation:",
-        "Translated text:",
-        "Japanese:",
-        "日本語:",
-    ]
-    for prefix in prefixes:
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
-
-    if field_type == "address":
-        text = text.replace("，", " ").replace(",", " ")
-        text = re.sub(r"\s{2,}", " ", text).strip()
-    elif field_type == "item_name":
-        text = text.rstrip("。.;；")
-    elif field_type == "person":
-        text = text.replace("様", "").replace("さん", "").strip()
-
-    return text
-
-
 def _build_prompt(field_type: str, source_lang: str, target_lang: str, text: str) -> str:
     if field_type == "address":
-        return f"""Translate the following delivery address into Japanese for logistics use.
-Rules:
-- Output only the translated address, with no explanation.
-- Preserve numbers, postal codes, room numbers, block numbers, and building identifiers accurately.
-- Keep the address concise and suitable for shipping labels.
-- Do not invent missing prefecture, city, or postal code information.
-- If a part is better kept in Latin letters or numbers, keep it.
+        return f"""Translate the following address into Japanese, without additional explanation.
 
 {text}"""
 
     if field_type == "item_name":
-        return f"""Translate the following product/item name into Japanese for logistics and customs use.
-Rules:
-- Output only the translated item name, with no explanation.
-- Use a specific and practical product description, not marketing wording.
-- Preserve brand, model, capacity, size, color, and quantity expressions when present.
-- Keep it concise and label-friendly.
+        return f"""Translate the following product name into Japanese, without additional explanation.
 
 {text}"""
 
     if field_type == "person":
-        return f"""Translate the following person's name into Japanese for shipping documents.
-Rules:
-- Output only the translated name, with no explanation.
-- Do not add honorifics such as 様.
-- Keep the result stable and concise.
-- If the original form is better preserved in Latin letters, keep it.
+        return f"""Translate the following name into Japanese, without additional explanation.
 
 {text}"""
 
     return f"""Translate the following segment into Japanese, without additional explanation.
+
 {text}"""
 
 
@@ -103,6 +61,51 @@ def _extract_content(data: dict) -> str:
     if "content" in data:
         return data["content"]
     raise RuntimeError(f"Unexpected llama response format: {data}")
+
+
+def _postprocess_translation(field_type: str, text: str) -> str:
+    text = _normalize_whitespace(text)
+    text = text.strip(' "\'')
+
+    # 去掉常见前缀
+    prefixes = [
+        "翻译：",
+        "译文：",
+        "Translation:",
+        "Translated text:",
+        "Japanese:",
+        "日本語:",
+    ]
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+
+    # 如果模型错误地把规则也翻译了，尽量提取最后一行
+    junk_markers = [
+        "ルール：",
+        "説明なしで",
+        "翻訳された住所のみ",
+        "項目名を翻訳しただけ",
+        "マーケティング用の表現ではなく",
+        "without additional explanation",
+        "do not add explanation",
+    ]
+    if any(marker in text for marker in junk_markers):
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if lines:
+            text = lines[-1]
+
+    if field_type == "address":
+        text = text.replace("，", " ").replace(",", " ")
+        text = re.sub(r"\s{2,}", " ", text).strip()
+
+    elif field_type == "item_name":
+        text = text.rstrip("。.;；")
+
+    elif field_type == "person":
+        text = text.replace("様", "").replace("さん", "").strip()
+
+    return text
 
 
 async def _post_with_retry(client: httpx.AsyncClient, payload: dict) -> dict:
