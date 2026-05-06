@@ -9,6 +9,7 @@ hy-mt-translator-gguf/
   ├─ llama-server/          # llama.cpp HTTP Server（加载 GGUF 模型）
   ├─ translator-api/        # 对外 REST API（/translate-batch）
   ├─ docs/                  # 接口文档
+  ├─ models/                # 从 Hugging Face 下载 GGUF 模型并保存在该文件夹
   ├─ docker-compose.yml     # 一键启动
   └─ README.md
 ```
@@ -23,8 +24,6 @@ hy-mt-translator-gguf/
 ```bash
 docker-compose up -d --build
 ```
-
-第一次启动会从 Hugging Face 下载 GGUF 模型，时间取决于网络，完成后会缓存。
 
 ## 测试
 
