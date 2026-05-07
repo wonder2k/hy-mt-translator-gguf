@@ -1,18 +1,33 @@
+# test-translate-batch.ps1
+# 本地 HY-MT Translator 接口批量压测脚本
+# 用法：在项目根目录下直接执行
+#        .\scripts\test-translate-batch.ps1
+
 # 强制使用 UTF-8 编码，避免中文乱码
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 1. 先检查 /health 接口是否正常
+# 1. API Key 配置（和 docker-compose.yml 一致）
+$API_KEY = "vewaQRJdlDRrhMLflROoftSxu2GZeYLd+n+tfULa8dE="
+
+$headers = @{
+    "X-API-Key" = $API_KEY
+}
+
+# 2. 先检查 /health 接口是否正常
 Write-Host "1. Testing /health..." -ForegroundColor Green
 try {
-    $health = Invoke-RestMethod -Uri "http://localhost:8000/health"
+    $health = Invoke-RestMethod `
+        -Uri "http://localhost:8000/health" `
+        -Method GET
+
     Write-Host "  - /health OK: $($health.status)" -ForegroundColor Green
 } catch {
     Write-Host "  - /health FAIL: $($_.ErrorDetails.Message)" -ForegroundColor Red
     exit 1
 }
 
-# 2. 定义基础测试数据
+# 3. 定义基础测试数据
 $BaseText = "Apple iPhone 15 Pro Max 256GB Black Titanium"
 $BaseField = "item_name"
 
@@ -36,7 +51,7 @@ function BuildBatchBody {
     }
 }
 
-# 3. 逐次测试 1条、10条、20条、50条
+# 4. 逐次测试 1条、10条、20条、50条
 $TestCases = @(1, 10, 20, 50)
 
 foreach ($ItemCount in $TestCases) {
@@ -52,6 +67,7 @@ foreach ($ItemCount in $TestCases) {
         $Result = Invoke-RestMethod `
             -Uri "http://localhost:8000/translate-batch" `
             -Method POST `
+            -Headers $headers `
             -Body $Bytes `
             -ContentType "application/json; charset=utf-8"
 
