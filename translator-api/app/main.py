@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from app.models import TranslateRequest, TranslateResponse
 from app.translator_client import translate_batch_via_llama
+from app.auth import verify_api_key
 
 app = FastAPI(
     title="HY-MT Translator API",
