@@ -606,6 +606,15 @@ All tests done.
 - `CONCURRENCY_LIMIT=3` 先保持不变
 - 后续优先引入缓存，再继续压榨吞吐
 
+### 14.5 压测脚本调用方式（带 API Key）
+
+powershell.exe -ExecutionPolicy Bypass -File ".\scripts\test-translate-batch.ps1"
+
+每次你在 Docker 环境中改动了以下任一参数时，都应该用此脚本重新做一次压测：
+- llama-server 参数（-np、-t、-c、是否开启 --cont-batching）
+- translator-api 参数（CONCURRENCY_LIMIT、MAX_OUTPUT_TOKENS）
+- Express 后端批量大小或分片策略
+
 ---
 
 ## 15. CPU / 内存 / 系统资源检查
