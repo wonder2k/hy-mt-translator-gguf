@@ -10,6 +10,15 @@
 
 底层模型采用本地 GGUF 文件，通过 `llama.cpp` 的 `llama-server` 提供 OpenAI 风格接口；上层通过 `translator-api` 暴露业务接口 `/translate-batch`。
 
+当前版本已经支持：
+
+- `/translate-batch` 批量翻译
+- Python 侧受控并行
+- `llama-server` continuous batching
+- `X-API-Key` 简单认证
+- PowerShell 批量压测
+- Windows / Docker Desktop 资源检查
+
 ---
 
 ## 1. 目录结构
@@ -24,6 +33,7 @@ hy-mt-translator/
   │   ├─ requirements.txt
   │   └─ app/
   │       ├─ main.py
+  │       ├─ auth.py
   │       ├─ models.py
   │       └─ translator_client.py
   ├─ scripts/
@@ -99,6 +109,7 @@ services:
     environment:
       - LLAMA_BASE_URL=http://host.docker.internal:8080
       - LLAMA_MODEL=HY-MT1.5-1.8B-Q4_K_M.gguf
+      - TRANSLATOR_API_KEY=replace-with-a-long-random-string
       - MAX_INPUT_CHARS=160
       - MAX_OUTPUT_TOKENS=48
       - REQUEST_TIMEOUT_SECONDS=60
@@ -192,9 +203,56 @@ $result | ConvertTo-Json -Depth 6
 
 ---
 
-## 8. 测试业务接口
+## 8. 认证机制
 
-### 8.1 测试 `/health`
+当前版本在 `/translate-batch` 上增加了简单的 API Key 认证，用于：
+
+- 防止未授权调用
+- 防止误调用导致 CPU 被无意义占用
+- 便于后续 Express 后端安全接入
+
+认证规则如下：
+
+- `GET /health`：**不需要认证**
+- `POST /translate-batch`：**必须带 `X-API-Key` 请求头**
+
+### 8.1 API Key 配置
+
+在 `docker-compose.yml` 中通过环境变量配置：
+
+```yaml
+- TRANSLATOR_API_KEY=replace-with-a-long-random-string
+```
+
+建议使用较长、随机、不可预测的字符串。
+
+### 8.2 请求头格式
+
+```http
+X-API-Key: replace-with-a-long-random-string
+```
+
+如果请求头缺失或值不正确，接口会返回：
+
+```json
+{
+  "detail": "Missing or invalid API key"
+}
+```
+
+如果服务端未配置 API Key，会返回：
+
+```json
+{
+  "detail": "Server API key is not configured"
+}
+```
+
+---
+
+## 9. 测试业务接口
+
+### 9.1 测试 `/health`
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health
@@ -208,13 +266,17 @@ Invoke-RestMethod http://localhost:8000/health
 }
 ```
 
-### 8.2 测试 `/translate-batch`
+### 9.2 测试 `/translate-batch`
 
 推荐在 PowerShell 里使用 `Invoke-RestMethod` 进行测试：
 
 ```powershell
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+$headers = @{
+  "X-API-Key" = "replace-with-a-long-random-string"
+}
 
 $body = @{
   source_lang = "en"
@@ -238,6 +300,7 @@ $body = @{
 $result = Invoke-RestMethod `
   -Uri "http://localhost:8000/translate-batch" `
   -Method POST `
+  -Headers $headers `
   -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
   -ContentType "application/json; charset=utf-8"
 
@@ -258,7 +321,7 @@ $result | ConvertTo-Json -Depth 5
 
 ---
 
-## 9. 接口说明
+## 10. 接口说明
 
 ### `GET /health`
 
@@ -271,6 +334,12 @@ $result | ConvertTo-Json -Depth 5
 ```
 
 ### `POST /translate-batch`
+
+请求头：
+
+```http
+X-API-Key: your-api-key
+```
 
 请求体：
 
@@ -309,7 +378,7 @@ $result | ConvertTo-Json -Depth 5
 
 ---
 
-## 10. field_type 说明
+## 11. field_type 说明
 
 支持以下取值：
 
@@ -344,7 +413,7 @@ $result | ConvertTo-Json -Depth 5
 
 ---
 
-## 11. 当前 prompt 设计原则
+## 12. 当前 prompt 设计原则
 
 当前版本**不使用长规则 prompt**。  
 原因是：在当前 GGUF + llama.cpp 组合下，模型可能会把说明文字本身一起翻译出来。
@@ -367,7 +436,7 @@ $result | ConvertTo-Json -Depth 5
 
 ---
 
-## 12. 当前性能策略
+## 13. 当前性能策略
 
 当前版本属于：
 
@@ -390,11 +459,11 @@ $result | ConvertTo-Json -Depth 5
 
 ---
 
-## 13. 批量压测脚本
+## 14. 批量压测脚本
 
 为了方便测试 `/translate-batch` 在不同批量下的性能，提供一份 PowerShell 压测脚本。
 
-### 13.1 创建脚本文件
+### 14.1 创建脚本文件
 
 创建：
 
@@ -419,7 +488,12 @@ try {
     exit 1
 }
 
-# 2. 定义基础测试数据
+# 2. API Key
+$headers = @{
+    "X-API-Key" = "replace-with-a-long-random-string"
+}
+
+# 3. 定义基础测试数据
 $BaseText = "Apple iPhone 15 Pro Max 256GB Black Titanium"
 $BaseField = "item_name"
 
@@ -443,7 +517,7 @@ function BuildBatchBody {
     }
 }
 
-# 3. 逐次测试 1条、10条、20条、50条
+# 4. 逐次测试 1条、10条、20条、50条
 $TestCases = @(1, 10, 20, 50)
 
 foreach ($ItemCount in $TestCases) {
@@ -459,6 +533,7 @@ foreach ($ItemCount in $TestCases) {
         $Result = Invoke-RestMethod `
             -Uri "http://localhost:8000/translate-batch" `
             -Method POST `
+            -Headers $headers `
             -Body $Bytes `
             -ContentType "application/json; charset=utf-8"
 
@@ -478,7 +553,7 @@ foreach ($ItemCount in $TestCases) {
 Write-Host "All tests done." -ForegroundColor Cyan
 ```
 
-### 13.2 运行脚本
+### 14.2 运行脚本
 
 如果系统默认不允许直接运行 `.ps1`，推荐使用下面这个一次性命令：
 
@@ -492,7 +567,7 @@ powershell.exe -ExecutionPolicy Bypass -File ".\scripts\test-translate-batch.ps1
 .\scripts\test-translate-batch.ps1
 ```
 
-### 13.3 示例压测结果
+### 14.3 示例压测结果
 
 示例输出：
 
@@ -510,7 +585,7 @@ powershell.exe -ExecutionPolicy Bypass -File ".\scripts\test-translate-batch.ps1
 All tests done.
 ```
 
-### 13.4 压测结果解读
+### 14.4 压测结果解读
 
 从上述样例可以看出：
 
@@ -533,7 +608,70 @@ All tests done.
 
 ---
 
-## 14. Windows PowerShell 执行策略说明
+## 15. CPU / 内存 / 系统资源检查
+
+为了判断当前配置下本地机器是否接近瓶颈，建议同时检查：
+
+- Docker 容器资源
+- Docker 可用资源总量
+- Windows 主机 CPU / 内存
+- 主要高占用进程
+
+### 15.1 查看容器 CPU / 内存
+
+```powershell
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.PIDs}}"
+```
+
+只查看本项目容器：
+
+```powershell
+docker stats --no-stream hy-mt-llama-server hy-mt-translator-api
+```
+
+### 15.2 查看 Docker 可用 CPU / 内存
+
+```powershell
+docker info --format "CPUs: {{.NCPU}}, Memory: {{.MemTotal}}"
+```
+
+### 15.3 查看 Windows 总 CPU 占用
+
+```powershell
+Get-Counter '\Processor(_Total)\% Processor Time'
+```
+
+### 15.4 查看可用内存
+
+```powershell
+Get-Counter '\Memory\Available MBytes'
+```
+
+### 15.5 查看最占资源的进程
+
+```powershell
+Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, CPU, WS, PM
+```
+
+### 15.6 图形界面检查
+
+- 任务管理器（Task Manager）
+- 资源监视器（运行 `resmon`）
+- Docker Desktop 容器资源界面
+
+### 15.7 如何判断是否已接近瓶颈
+
+一般可以这样判断：
+
+- `hy-mt-llama-server` 在压测时 CPU 明显升高，说明推理在正常工作
+- `translator-api` CPU 通常较低，这是正常现象
+- 如果 Windows 主机整体 CPU 长时间接近 90% 以上，并出现明显卡顿，说明当前并发或 batch 偏高
+- 如果 `llama-server` 内存稳定且不持续上涨，通常说明资源状态正常
+- 如果大批量耗时增长明显变陡，说明已接近 CPU 推理吞吐瓶颈
+
+---
+
+## 16. Windows PowerShell 执行策略说明
 
 如果运行脚本时报错：
 
@@ -559,9 +697,9 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 ---
 
-## 15. 常见问题
+## 17. 常见问题
 
-### 15.1 PowerShell 显示乱码
+### 17.1 PowerShell 显示乱码
 
 如果返回日文时出现乱码，通常不是服务错误，而是控制台编码问题。  
 请确保使用：
@@ -578,12 +716,12 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 -ContentType "application/json; charset=utf-8"
 ```
 
-### 15.2 模型把提示词规则也翻译出来
+### 17.2 模型把提示词规则也翻译出来
 
 说明 prompt 太长、太像说明书。  
 请改用当前 README 中的**短 prompt 版本**，不要恢复旧版长规则模板。
 
-### 15.3 translator-api 改了但没生效
+### 17.3 translator-api 改了但没生效
 
 修改 Python 代码后要重新 build：
 
@@ -592,14 +730,34 @@ docker-compose build translator-api
 docker-compose up -d translator-api
 ```
 
-### 15.4 批量太大导致响应明显变慢
+### 17.4 忘记带 X-API-Key
+
+接口会返回 401：
+
+```json
+{
+  "detail": "Missing or invalid API key"
+}
+```
+
+### 17.5 服务端没配置 TRANSLATOR_API_KEY
+
+接口会返回 500：
+
+```json
+{
+  "detail": "Server API key is not configured"
+}
+```
+
+### 17.6 批量太大导致响应明显变慢
 
 这是本地 CPU 推理的正常现象。  
 建议优先做业务分块和缓存，而不是继续无限增大单次 batch。
 
 ---
 
-## 16. 后续优化路线
+## 18. 后续优化路线
 
 建议按这个顺序做：
 
@@ -607,4 +765,31 @@ docker-compose up -d translator-api
 2. Python 侧受控并行
 3. llama-server 并发参数微调
 4. Express 端批量分块
-5. Redis / PostgreSQL 
+5. Redis / PostgreSQL 缓存
+6. 术语表
+7. 更深层 batch 优化
+
+---
+
+## 19. 不建议现在做的事
+
+当前阶段不建议：
+
+- 把所有 item 拼成一个超长 prompt
+- 盲目提高并发到 8 或更高
+- 频繁改 llama-server 底层实现
+- 在系统还没稳定前就引入过多复杂缓存逻辑
+
+---
+
+## 20. 当前结论
+
+对本地笔记本、物流字段短文本、英文到日文翻译这个场景来说，当前方案已经可以进入业务联调。  
+下一阶段重点应放在：
+
+- Express 后端接入
+- 批量请求拆分
+- 翻译缓存
+- 术语一致性
+- API Key 安全接入
+- 资源占用监控
