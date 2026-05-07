@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from app.models import TranslateRequest, TranslateResponse
 from app.translator_client import translate_batch_via_llama
