@@ -24,8 +24,10 @@ async def health():
 
 
 @app.post("/translate-batch", response_model=TranslateResponse)
-async def translate_batch(req: TranslateRequest,
-                         _: str = Depends(verify_api_key):
+async def translate_batch(
+    req: TranslateRequest,
+    _: str = Depends(verify_api_key),
+):
     try:
         texts = [item.text for item in req.items]
         field_types = [item.field_type or "generic" for item in req.items]
